@@ -2,4 +2,4 @@ DB_HOST = "localhost"
 DB_PORT = 5432
 DB_USER = "postgres"
 DB_PASSWORD = "postgres"
-DB_NAME = "sistema_financeiro_simplificado"
+DB_NAME = "sistema_financeiro"

@@ -35,6 +35,11 @@ Execute o script SQL para criar as tabelas:
 ```bash
 psql -U postgres -d sistema_financeiro_simplificado -f database/schema.sql
 ```
+Ou execute o script o arquivo create_table.py:
+
+```bash
+python create_table.py
+```
 
 Ou crie o banco primeiro e depois execute o script:
 

@@ -1,177 +1,218 @@
-<<<<<<< HEAD
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional
 from datetime import datetime
 from core.db import get_db, DataBase
 from modules.pagamento.schemas import PagamentoCreate, PagamentoUpdate, Pagamento
-=======
-from fastapi import APIRouter, HTTPException, Depends
-from typing import List
-from core.db import get_db
-from modules.pagamento.schemas import PagamentoCreate, Pagamento
->>>>>>> 8df36cda30eeeaec837af4a9e0f7d54ef24e57c6
 
 router = APIRouter(prefix="/pagamentos", tags=["pagamentos"])
 
-<<<<<<< HEAD
-@router.get('/', response_model=List[Pagamento])
+
+# =====================================================
+# LISTAR PAGAMENTOS COM FILTROS
+# =====================================================
+@router.get("/", response_model=List[Pagamento])
 def list_pagamentos(
-    transacao_id: Optional[int] = Query(None, description="Filtrar por transação"),
-    status: Optional[str] = Query(None, description="Filtrar por status (pago/pendente/cancelado)"),
-    data_ini: Optional[datetime] = Query(None, description="Data inicial (ISO 8601)"),
-    data_fim: Optional[datetime] = Query(None, description="Data final (ISO 8601)"),
-    ativo: Optional[bool] = Query(None, description="Filtrar por status ativo"),
+    transacao_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None, description="pago / pendente / cancelado"),
+    data_ini: Optional[datetime] = Query(None),
+    data_fim: Optional[datetime] = Query(None),
+    ativo: Optional[bool] = Query(None),
     db: DataBase = Depends(get_db)
 ):
-    query = "SELECT id, transacao_id, status, data_pagamento, ativo FROM pagamento WHERE 1=1"
+    query = """
+        SELECT id, transacao_id, status, data_pagamento, ativo
+        FROM pagamento
+        WHERE 1=1
+    """
     params = []
-    
+
     if transacao_id:
         query += " AND transacao_id = %s"
         params.append(transacao_id)
-    
+
     if status:
-        if status not in ('pago', 'pendente', 'cancelado'):
-            raise HTTPException(status_code=400, detail='status deve ser pago, pendente ou cancelado')
+        if status not in ("pago", "pendente", "cancelado"):
+            raise HTTPException(400, "Status inválido")
         query += " AND status = %s"
         params.append(status)
-    
+
     if data_ini:
         query += " AND data_pagamento >= %s"
         params.append(data_ini)
-    
+
     if data_fim:
         query += " AND data_pagamento <= %s"
         params.append(data_fim)
-    
+
     if ativo is not None:
         query += " AND ativo = %s"
         params.append(ativo)
-    
+
     query += " ORDER BY id"
-    
-    rows = db.execute(query, tuple(params) if params else None)
+
+    cursor = db.cursor()
+    cursor.execute(query, tuple(params) if params else None)
+    rows = cursor.fetchall()
+    cursor.close()
+
     return [dict(row) for row in rows]
 
-@router.get('/{id}', response_model=Pagamento)
+
+# =====================================================
+# GET POR ID
+# =====================================================
+@router.get("/{id}", response_model=Pagamento)
 def get_pagamento(id: int, db: DataBase = Depends(get_db)):
-    row = db.execute_one(
+    cursor = db.cursor()
+    cursor.execute(
         "SELECT id, transacao_id, status, data_pagamento, ativo FROM pagamento WHERE id = %s",
         (id,)
     )
+    row = cursor.fetchone()
+    cursor.close()
+
     if not row:
-        raise HTTPException(status_code=404, detail='Pagamento não encontrado')
+        raise HTTPException(404, "Pagamento não encontrado")
+
     return dict(row)
 
-@router.post('/', response_model=Pagamento, status_code=201)
+
+# =====================================================
+# CRIAR PAGAMENTO
+# =====================================================
+@router.post("/", response_model=Pagamento, status_code=201)
 def create_pagamento(payload: PagamentoCreate, db: DataBase = Depends(get_db)):
-    if payload.status not in ('pago', 'pendente', 'cancelado'):
-        raise HTTPException(status_code=400, detail='status deve ser pago, pendente ou cancelado')
-    
-    # Verificar se transação existe e está ativa
-    transacao = db.execute_one("SELECT id, ativo, data FROM transacao WHERE id = %s", (payload.transacao_id,))
+
+    if payload.status not in ("pago", "pendente", "cancelado"):
+        raise HTTPException(400, "Status inválido")
+
+    # Verificar transação
+    cursor = db.cursor()
+    cursor.execute("SELECT id, ativo, data FROM transacao WHERE id = %s", (payload.transacao_id,))
+    transacao = cursor.fetchone()
+
     if not transacao:
-        raise HTTPException(status_code=404, detail='Transacao não encontrada')
-    if not transacao['ativo']:
-        raise HTTPException(status_code=400, detail='Transacao está desativada')
-    
-    # Validar data_pagamento não pode ser anterior à data da transação
-    if payload.data_pagamento and transacao['data']:
-        if payload.data_pagamento < transacao['data']:
-            raise HTTPException(status_code=400, detail='data_pagamento não pode ser anterior à data da transação')
-    
-    row = db.commit(
-        "INSERT INTO pagamento (transacao_id, status, data_pagamento, ativo) VALUES (%s, %s, %s, %s) RETURNING id, transacao_id, status, data_pagamento, ativo",
+        cursor.close()
+        raise HTTPException(404, "Transação não encontrada")
+
+    if not transacao["ativo"]:
+        cursor.close()
+        raise HTTPException(400, "Transação desativada")
+
+    # Validar data
+    if payload.data_pagamento and payload.data_pagamento < transacao["data"]:
+        cursor.close()
+        raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
+
+    # Inserir pagamento
+    cursor.execute(
+        """
+        INSERT INTO pagamento (transacao_id, status, data_pagamento, ativo)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, transacao_id, status, data_pagamento, ativo
+        """,
         (payload.transacao_id, payload.status, payload.data_pagamento, True)
     )
+    row = cursor.fetchone()
+    db.commit()
+    cursor.close()
+
     return dict(row)
 
-@router.put('/{id}', response_model=Pagamento)
+
+# =====================================================
+# UPDATE PAGAMENTO
+# =====================================================
+@router.put("/{id}", response_model=Pagamento)
 def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(get_db)):
-    # Verificar se o pagamento existe
-    pagamento = db.execute_one("SELECT id FROM pagamento WHERE id = %s", (id,))
+
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM pagamento WHERE id = %s", (id,))
+    pagamento = cursor.fetchone()
+
     if not pagamento:
-        raise HTTPException(status_code=404, detail='Pagamento não encontrado')
-    
-    # Construir query de atualização dinamicamente
+        cursor.close()
+        raise HTTPException(404, "Pagamento não encontrado")
+
     updates = []
     params = []
-    
+
+    # Alterar transacao_id
     if payload.transacao_id is not None:
-        # Verificar se transação existe e está ativa
-        transacao = db.execute_one("SELECT id, ativo, data FROM transacao WHERE id = %s", (payload.transacao_id,))
+        cursor.execute("SELECT id, ativo, data FROM transacao WHERE id = %s", (payload.transacao_id,))
+        transacao = cursor.fetchone()
+
         if not transacao:
-            raise HTTPException(status_code=404, detail='Transacao não encontrada')
-        if not transacao['ativo']:
-            raise HTTPException(status_code=400, detail='Transacao está desativada')
+            cursor.close()
+            raise HTTPException(404, "Transação não encontrada")
+
+        if not transacao["ativo"]:
+            cursor.close()
+            raise HTTPException(400, "Transação desativada")
+
         updates.append("transacao_id = %s")
         params.append(payload.transacao_id)
-    
+
+    # Alterar status
     if payload.status is not None:
-        if payload.status not in ('pago', 'pendente', 'cancelado'):
-            raise HTTPException(status_code=400, detail='status deve ser pago, pendente ou cancelado')
+        if payload.status not in ("pago", "pendente", "cancelado"):
+            cursor.close()
+            raise HTTPException(400, "Status inválido")
+
         updates.append("status = %s")
         params.append(payload.status)
-    
+
+    # Alterar data_pagamento
     if payload.data_pagamento is not None:
-        # Se mudou transacao_id, buscar a nova transação para validar data
-        transacao_id = payload.transacao_id if payload.transacao_id else None
-        if not transacao_id:
-            # Buscar transacao_id atual
-            pagamento_atual = db.execute_one("SELECT transacao_id FROM pagamento WHERE id = %s", (id,))
-            transacao_id = pagamento_atual['transacao_id']
-        
-        transacao = db.execute_one("SELECT data FROM transacao WHERE id = %s", (transacao_id,))
-        if transacao and payload.data_pagamento < transacao['data']:
-            raise HTTPException(status_code=400, detail='data_pagamento não pode ser anterior à data da transação')
-        
+
+        transacao_id = payload.transacao_id or pagamento["transacao_id"]
+
+        cursor.execute("SELECT data FROM transacao WHERE id = %s", (transacao_id,))
+        transacao = cursor.fetchone()
+
+        if transacao and payload.data_pagamento < transacao["data"]:
+            cursor.close()
+            raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
+
         updates.append("data_pagamento = %s")
         params.append(payload.data_pagamento)
-    
+
     if not updates:
-        # Se não há atualizações, retornar o pagamento atual
-        return get_pagamento(id, db)
-    
+        cursor.close()
+        return dict(pagamento)
+
     params.append(id)
-    query = f"UPDATE pagamento SET {', '.join(updates)} WHERE id = %s RETURNING id, transacao_id, status, data_pagamento, ativo"
-    
-    row = db.commit(query, tuple(params))
+
+    query = f"""
+        UPDATE pagamento
+        SET {', '.join(updates)}
+        WHERE id = %s
+        RETURNING id, transacao_id, status, data_pagamento, ativo
+    """
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    db.commit()
+    cursor.close()
+
     return dict(row)
 
-@router.patch('/{id}/desativar', status_code=204)
+
+# =====================================================
+# DESATIVAR PAGAMENTO
+# =====================================================
+@router.patch("/{id}/desativar", status_code=204)
 def desativar_pagamento(id: int, db: DataBase = Depends(get_db)):
-    row = db.commit(
+    cursor = db.cursor()
+    cursor.execute(
         "UPDATE pagamento SET ativo = %s WHERE id = %s RETURNING id",
         (False, id)
     )
+    row = cursor.fetchone()
+
     if not row:
-        raise HTTPException(status_code=404, detail='Pagamento não encontrado')
+        cursor.close()
+        raise HTTPException(404, "Pagamento não encontrado")
+
+    db.commit()
+    cursor.close()
     return None
-=======
-@router.get("/", response_model=List[Pagamento])
-def list_pagamentos(db=Depends(get_db)):
-    with db.cursor() as cur:
-        cur.execute("SELECT id, transacao_id, status, data_pagamento FROM pagamento ORDER BY id")
-        rows = cur.fetchall()
-    return rows
-
-@router.get("/{id}", response_model=Pagamento)
-def get_pagamento(id: int, db=Depends(get_db)):
-    with db.cursor() as cur:
-        cur.execute("SELECT id, transacao_id, status, data_pagamento FROM pagamento WHERE id = %s", (id,))
-        row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Pagamento não encontrado")
-    return row
-
-@router.post("/", response_model=Pagamento)
-def create_pagamento(payload: PagamentoCreate, db=Depends(get_db)):
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO pagamento (transacao_id, status, data_pagamento) VALUES (%s, %s, %s) RETURNING id, transacao_id, status, data_pagamento",
-            (payload.transacao_id, payload.status, payload.data_pagamento)
-        )
-        row = cur.fetchone()
-        db.commit()
-    return row
->>>>>>> 8df36cda30eeeaec837af4a9e0f7d54ef24e57c6

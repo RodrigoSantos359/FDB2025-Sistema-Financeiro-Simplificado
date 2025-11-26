@@ -16,7 +16,7 @@ DB_CONFIG = {
 # 🔹 Classe opcional (pouco usada nas rotas, mas deixada aqui caso queira usar manualmente)
 class DataBase:
     def __init__(self):
-<<<<<<< HEAD
+
         self.conn = None
 
     def _get_conn(self):
@@ -71,7 +71,7 @@ class DataBase:
         if self.conn and not self.conn.closed:
             self.conn.close()
 
-=======
+
         self.conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
 
     def execute(self, sql, many=True):
@@ -87,8 +87,7 @@ class DataBase:
             self.conn.commit()
         self.conn.close()
         return None
->>>>>>> 8df36cda30eeeaec837af4a9e0f7d54ef24e57c6
-
+    
 
 # 🔹 Função de dependência para FastAPI (usada com Depends)
 def get_db():
@@ -96,8 +95,6 @@ def get_db():
     try:
         yield conn
     finally:
-<<<<<<< HEAD
-        db.close()
-=======
+
         conn.close()
->>>>>>> 8df36cda30eeeaec837af4a9e0f7d54ef24e57c6
+

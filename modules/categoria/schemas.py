@@ -9,6 +9,7 @@ class CategoriaCreate(BaseModel):
 class CategoriaUpdate(BaseModel):
     nome: Optional[str] = None
     tipo: Optional[Literal['receita', 'despesa']] = None
+    ativo: Optional[bool] = None  # ← faltava isso!
 
 
 class Categoria(CategoriaCreate):

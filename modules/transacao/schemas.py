@@ -1,27 +1,28 @@
 from pydantic import BaseModel
-from typing import Literal, Optional
 from datetime import datetime
+from modules.categoria.schemas import Categoria
 
-
-class TransacaoCreate(BaseModel):
-    conta_id: int
-    categoria_id: int
+class TransacaoBase(BaseModel):
     valor: float
     data: datetime
-    descricao: Optional[str] = None
+    descricao: str
 
+class TransacaoCreate(TransacaoBase):
+    conta_id: int
+    categoria_id: int
 
 class TransacaoUpdate(BaseModel):
-    conta_id: Optional[int] = None
-    categoria_id: Optional[int] = None
-    valor: Optional[float] = None
-    data: Optional[datetime] = None
-    descricao: Optional[str] = None
+    conta_id: int | None = None
+    categoria_id: int | None = None
+    valor: float | None = None
+    data: datetime | None = None
+    descricao: str | None = None
 
-
-class Transacao(TransacaoCreate):
+class Transacao(TransacaoBase):
     id: int
-    ativo: bool = True
-    
+    conta_id: int
+    ativo: bool
+    categoria: Categoria  # <-- AGORA VEM O OBJETO COMPLETO
+
     class Config:
-        orm_mode = True
+        from_attributes = True

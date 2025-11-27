@@ -8,7 +8,27 @@ router = APIRouter(prefix="/transacoes", tags=["transacoes"])
 
 
 # =======================================================
-# LISTAR TRANSAÇÕES
+# Função auxiliar para montar o objeto final
+# =======================================================
+def format_transacao(row):
+    return {
+        "id": row["id"],
+        "conta_id": row["conta_id"],
+        "valor": row["valor"],
+        "data": row["data"],
+        "descricao": row["descricao"],
+        "ativo": row["ativo"],
+        "categoria": {
+            "id": row["categoria_id"],
+            "nome": row["categoria_nome"],
+            "tipo": row["categoria_tipo"],
+            "ativo": row["categoria_ativo"]
+        }
+    }
+
+
+# =======================================================
+# LISTAR TRANSAÇÕES (AGORA COM JOIN NA CATEGORIA)
 # =======================================================
 @router.get("/", response_model=List[Transacao])
 def list_transacoes(
@@ -22,40 +42,44 @@ def list_transacoes(
     cursor = db.cursor()
 
     query = """
-        SELECT id, conta_id, categoria_id, valor, data, descricao, ativo
-        FROM transacao
+        SELECT 
+            t.id, t.conta_id, t.valor, t.data, t.descricao, t.ativo,
+            c.id AS categoria_id, c.nome AS categoria_nome, 
+            c.tipo AS categoria_tipo, c.ativo AS categoria_ativo
+        FROM transacao t
+        LEFT JOIN categoria c ON c.id = t.categoria_id
         WHERE 1=1
     """
 
     params = []
 
     if conta_id:
-        query += " AND conta_id = %s"
+        query += " AND t.conta_id = %s"
         params.append(conta_id)
 
     if categoria_id:
-        query += " AND categoria_id = %s"
+        query += " AND t.categoria_id = %s"
         params.append(categoria_id)
 
     if data_ini:
-        query += " AND data >= %s"
+        query += " AND t.data >= %s"
         params.append(data_ini)
 
     if data_fim:
-        query += " AND data <= %s"
+        query += " AND t.data <= %s"
         params.append(data_fim)
 
     if ativo is not None:
-        query += " AND ativo = %s"
+        query += " AND t.ativo = %s"
         params.append(ativo)
 
-    query += " ORDER BY id"
+    query += " ORDER BY t.id"
 
     cursor.execute(query, tuple(params))
     rows = cursor.fetchall()
     cursor.close()
 
-    return rows  # já são dicts do RealDictCursor
+    return [format_transacao(row) for row in rows]
 
 
 # =======================================================
@@ -66,9 +90,13 @@ def get_transacao(id: int, db=Depends(get_db)):
     cursor = db.cursor()
 
     cursor.execute("""
-        SELECT id, conta_id, categoria_id, valor, data, descricao, ativo
-        FROM transacao
-        WHERE id = %s
+        SELECT 
+            t.id, t.conta_id, t.valor, t.data, t.descricao, t.ativo,
+            c.id AS categoria_id, c.nome AS categoria_nome, 
+            c.tipo AS categoria_tipo, c.ativo AS categoria_ativo
+        FROM transacao t
+        LEFT JOIN categoria c ON c.id = t.categoria_id
+        WHERE t.id = %s
     """, (id,))
 
     row = cursor.fetchone()
@@ -77,7 +105,7 @@ def get_transacao(id: int, db=Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Transação não encontrada")
 
-    return row  # row já é dict
+    return format_transacao(row)
 
 
 # =======================================================
@@ -99,7 +127,7 @@ def create_transacao(payload: TransacaoCreate, db=Depends(get_db)):
 
     # Verifica categoria
     cursor = db.cursor()
-    cursor.execute("SELECT id, ativo FROM categoria WHERE id = %s", (payload.categoria_id,))
+    cursor.execute("SELECT id, nome, tipo, ativo FROM categoria WHERE id = %s", (payload.categoria_id,))
     categoria = cursor.fetchone()
     cursor.close()
 
@@ -113,7 +141,7 @@ def create_transacao(payload: TransacaoCreate, db=Depends(get_db)):
     cursor.execute("""
         INSERT INTO transacao (conta_id, categoria_id, valor, data, descricao, ativo)
         VALUES (%s, %s, %s, %s, %s, TRUE)
-        RETURNING id, conta_id, categoria_id, valor, data, descricao, ativo
+        RETURNING id, conta_id, valor, data, descricao, ativo
     """, (payload.conta_id, payload.categoria_id, payload.valor,
           payload.data, payload.descricao))
 
@@ -121,7 +149,11 @@ def create_transacao(payload: TransacaoCreate, db=Depends(get_db)):
     db.commit()
     cursor.close()
 
-    return row
+    # Montar objeto final com categoria
+    return {
+        **row,
+        "categoria": categoria
+    }
 
 
 # =======================================================
@@ -130,13 +162,12 @@ def create_transacao(payload: TransacaoCreate, db=Depends(get_db)):
 @router.put("/{id}", response_model=Transacao)
 def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
 
-    # Verificar se existe
     cursor = db.cursor()
     cursor.execute("SELECT id FROM transacao WHERE id = %s", (id,))
-    transacao = cursor.fetchone()
+    existe = cursor.fetchone()
     cursor.close()
 
-    if not transacao:
+    if not existe:
         raise HTTPException(status_code=404, detail="Transação não encontrada")
 
     updates = []
@@ -158,9 +189,10 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
         params.append(payload.conta_id)
 
     # Valida categoria
+    categoria_atualizada = None
     if payload.categoria_id is not None:
         cursor = db.cursor()
-        cursor.execute("SELECT id, ativo FROM categoria WHERE id = %s", (payload.categoria_id,))
+        cursor.execute("SELECT id, nome, tipo, ativo FROM categoria WHERE id = %s", (payload.categoria_id,))
         categoria = cursor.fetchone()
         cursor.close()
 
@@ -169,12 +201,11 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
         if not categoria["ativo"]:
             raise HTTPException(status_code=400, detail="Categoria desativada")
 
+        categoria_atualizada = categoria
         updates.append("categoria_id = %s")
         params.append(payload.categoria_id)
 
     if payload.valor is not None:
-        if payload.valor <= 0:
-            raise HTTPException(status_code=400, detail="Valor deve ser maior que zero")
         updates.append("valor = %s")
         params.append(payload.valor)
 
@@ -195,7 +226,7 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
         UPDATE transacao
         SET {', '.join(updates)}
         WHERE id = %s
-        RETURNING id, conta_id, categoria_id, valor, data, descricao, ativo
+        RETURNING id, conta_id, valor, data, descricao, ativo
     """
 
     cursor = db.cursor()
@@ -204,7 +235,17 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
     db.commit()
     cursor.close()
 
-    return row
+    # pega categoria final
+    if not categoria_atualizada:
+        cursor = db.cursor()
+        cursor.execute("SELECT id, nome, tipo, ativo FROM categoria WHERE id = (SELECT categoria_id FROM transacao WHERE id = %s)", (id,))
+        categoria_atualizada = cursor.fetchone()
+        cursor.close()
+
+    return {
+        **row,
+        "categoria": categoria_atualizada
+    }
 
 
 # =======================================================

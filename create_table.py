@@ -53,6 +53,7 @@ END $$;
     id SERIAL PRIMARY KEY,
     conta_id INTEGER NOT NULL REFERENCES conta(id),
     categoria_id INTEGER NOT NULL REFERENCES categoria(id),
+    pessoa_id INTEGER REFERENCES pessoa(id),
     valor DECIMAL(10, 2) NOT NULL CHECK (valor > 0),
     data TIMESTAMP NOT NULL,
     descricao TEXT,
@@ -60,11 +61,20 @@ END $$;
 );
 
 -- Adicionar coluna ativo se não existir
-DO $$ 
+DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_name='transacao' AND column_name='ativo') THEN
         ALTER TABLE transacao ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
+    END IF;
+END $$;
+
+-- Adicionar coluna pessoa_id se não existir
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name='transacao' AND column_name='pessoa_id') THEN
+        ALTER TABLE transacao ADD COLUMN pessoa_id INTEGER REFERENCES pessoa(id);
     END IF;
 END $$;
 
@@ -105,7 +115,6 @@ BEGIN
         ALTER TABLE pagamento ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
     END IF;
 END $$;
-    );
     """,
     # 5. Índices para melhor performance
     """

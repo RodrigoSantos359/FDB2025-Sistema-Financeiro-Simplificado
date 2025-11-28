@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS transacao (
     id SERIAL PRIMARY KEY,
     conta_id INTEGER NOT NULL REFERENCES conta(id),
     categoria_id INTEGER NOT NULL REFERENCES categoria(id),
+    pessoa_id INTEGER REFERENCES pessoa(id),
     valor DECIMAL(10, 2) NOT NULL CHECK (valor > 0),
     data TIMESTAMP NOT NULL,
     descricao TEXT,

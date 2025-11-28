@@ -14,6 +14,7 @@ def format_transacao(row):
     return {
         "id": row["id"],
         "conta_id": row["conta_id"],
+        "pessoa_id": row.get("pessoa_id"),
         "valor": row["valor"],
         "data": row["data"],
         "descricao": row["descricao"],
@@ -23,7 +24,13 @@ def format_transacao(row):
             "nome": row["categoria_nome"],
             "tipo": row["categoria_tipo"],
             "ativo": row["categoria_ativo"]
-        }
+        },
+        "pessoa": {
+            "id": row.get("pessoa_id"),
+            "nome": row.get("pessoa_nome"),
+            "tipo": row.get("pessoa_tipo"),
+            "ativo": row.get("pessoa_ativo")
+        } if row.get("pessoa_id") else None
     }
 
 
@@ -42,12 +49,15 @@ def list_transacoes(
     cursor = db.cursor()
 
     query = """
-        SELECT 
-            t.id, t.conta_id, t.valor, t.data, t.descricao, t.ativo,
-            c.id AS categoria_id, c.nome AS categoria_nome, 
-            c.tipo AS categoria_tipo, c.ativo AS categoria_ativo
+        SELECT
+            t.id, t.conta_id, t.pessoa_id, t.valor, t.data, t.descricao, t.ativo,
+            c.id AS categoria_id, c.nome AS categoria_nome,
+            c.tipo AS categoria_tipo, c.ativo AS categoria_ativo,
+            p.id AS pessoa_id, p.nome AS pessoa_nome,
+            p.tipo AS pessoa_tipo, p.ativo AS pessoa_ativo
         FROM transacao t
         LEFT JOIN categoria c ON c.id = t.categoria_id
+        LEFT JOIN pessoa p ON p.id = t.pessoa_id
         WHERE 1=1
     """
 
@@ -90,12 +100,15 @@ def get_transacao(id: int, db=Depends(get_db)):
     cursor = db.cursor()
 
     cursor.execute("""
-        SELECT 
-            t.id, t.conta_id, t.valor, t.data, t.descricao, t.ativo,
-            c.id AS categoria_id, c.nome AS categoria_nome, 
-            c.tipo AS categoria_tipo, c.ativo AS categoria_ativo
+        SELECT
+            t.id, t.conta_id, t.pessoa_id, t.valor, t.data, t.descricao, t.ativo,
+            c.id AS categoria_id, c.nome AS categoria_nome,
+            c.tipo AS categoria_tipo, c.ativo AS categoria_ativo,
+            p.id AS pessoa_id, p.nome AS pessoa_nome,
+            p.tipo AS pessoa_tipo, p.ativo AS pessoa_ativo
         FROM transacao t
         LEFT JOIN categoria c ON c.id = t.categoria_id
+        LEFT JOIN pessoa p ON p.id = t.pessoa_id
         WHERE t.id = %s
     """, (id,))
 
@@ -136,23 +149,37 @@ def create_transacao(payload: TransacaoCreate, db=Depends(get_db)):
     if not categoria["ativo"]:
         raise HTTPException(status_code=400, detail="Categoria desativada")
 
+    # Verifica pessoa se fornecida
+    pessoa = None
+    if payload.pessoa_id:
+        cursor = db.cursor()
+        cursor.execute("SELECT id, nome, tipo, ativo FROM pessoa WHERE id = %s", (payload.pessoa_id,))
+        pessoa = cursor.fetchone()
+        cursor.close()
+
+        if not pessoa:
+            raise HTTPException(status_code=404, detail="Pessoa não encontrada")
+        if not pessoa["ativo"]:
+            raise HTTPException(status_code=400, detail="Pessoa está desativada")
+
     # Inserir transação
     cursor = db.cursor()
     cursor.execute("""
-        INSERT INTO transacao (conta_id, categoria_id, valor, data, descricao, ativo)
-        VALUES (%s, %s, %s, %s, %s, TRUE)
-        RETURNING id, conta_id, valor, data, descricao, ativo
-    """, (payload.conta_id, payload.categoria_id, payload.valor,
-          payload.data, payload.descricao))
+        INSERT INTO transacao (conta_id, categoria_id, pessoa_id, valor, data, descricao, ativo)
+        VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+        RETURNING id, conta_id, pessoa_id, valor, data, descricao, ativo
+    """, (payload.conta_id, payload.categoria_id, payload.pessoa_id,
+          payload.valor, payload.data, payload.descricao))
 
     row = cursor.fetchone()
     db.commit()
     cursor.close()
 
-    # Montar objeto final com categoria
+    # Montar objeto final com categoria e pessoa
     return {
         **row,
-        "categoria": categoria
+        "categoria": categoria,
+        "pessoa": pessoa
     }
 
 
@@ -187,6 +214,23 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
 
         updates.append("conta_id = %s")
         params.append(payload.conta_id)
+
+    # Valida pessoa
+    pessoa_atualizada = None
+    if payload.pessoa_id is not None:
+        cursor = db.cursor()
+        cursor.execute("SELECT id, nome, tipo, ativo FROM pessoa WHERE id = %s", (payload.pessoa_id,))
+        pessoa = cursor.fetchone()
+        cursor.close()
+
+        if not pessoa:
+            raise HTTPException(status_code=404, detail="Pessoa não encontrada")
+        if not pessoa["ativo"]:
+            raise HTTPException(status_code=400, detail="Pessoa desativada")
+
+        pessoa_atualizada = pessoa
+        updates.append("pessoa_id = %s")
+        params.append(payload.pessoa_id)
 
     # Valida categoria
     categoria_atualizada = None
@@ -226,7 +270,7 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
         UPDATE transacao
         SET {', '.join(updates)}
         WHERE id = %s
-        RETURNING id, conta_id, valor, data, descricao, ativo
+        RETURNING id, conta_id, pessoa_id, valor, data, descricao, ativo
     """
 
     cursor = db.cursor()
@@ -234,6 +278,13 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
     row = cursor.fetchone()
     db.commit()
     cursor.close()
+
+    # pega pessoa final
+    if not pessoa_atualizada:
+        cursor = db.cursor()
+        cursor.execute("SELECT id, nome, tipo, ativo FROM pessoa WHERE id = (SELECT pessoa_id FROM transacao WHERE id = %s)", (id,))
+        pessoa_atualizada = cursor.fetchone()
+        cursor.close()
 
     # pega categoria final
     if not categoria_atualizada:
@@ -244,7 +295,8 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
 
     return {
         **row,
-        "categoria": categoria_atualizada
+        "categoria": categoria_atualizada,
+        "pessoa": pessoa_atualizada
     }
 
 

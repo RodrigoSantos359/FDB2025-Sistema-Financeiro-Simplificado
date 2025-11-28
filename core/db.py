@@ -72,23 +72,6 @@ class DataBase:
             self.conn.close()
 
 
-        self.conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
-
-    def execute(self, sql, many=True):
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql)
-            result = cursor.fetchall() if many else cursor.fetchone()
-        self.conn.close()
-        return result
-
-    def commit(self, sql):
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql)
-            self.conn.commit()
-        self.conn.close()
-        return None
-    
-
 # 🔹 Função de dependência para FastAPI (usada com Depends)
 def get_db():
     conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)

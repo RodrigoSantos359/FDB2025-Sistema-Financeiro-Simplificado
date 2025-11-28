@@ -1,10 +1,42 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from core.db import get_db, DataBase
 from modules.pagamento.schemas import PagamentoCreate, PagamentoUpdate, Pagamento
 
 router = APIRouter(prefix="/pagamentos", tags=["pagamentos"])
+
+# Função auxiliar para montar o objeto final do pagamento
+def format_pagamento(row):
+    result = {
+        "id": row["id"],
+        "status": row["status"],
+        "data_pagamento": row["data_pagamento"],
+        "ativo": row["ativo"]
+    }
+
+    # Incluir transacao_id se existir
+    if row.get("transacao_id"):
+        result["transacao_id"] = row["transacao_id"]
+
+    # Incluir transacao se existir
+    if row.get("transacao_id"):
+        result["transacao"] = {
+            "id": row.get("transacao_id"),
+            "pessoa_id": row.get("transacao_pessoa_id"),
+            "valor": row.get("transacao_valor"),
+            "data": row.get("transacao_data"),
+            "descricao": row.get("transacao_descricao"),
+            "pessoa": {
+                "id": row.get("pessoa_id"),
+                "nome": row.get("pessoa_nome"),
+                "tipo": row.get("pessoa_tipo"),
+                "ativo": row.get("pessoa_ativo")
+            } if row.get("pessoa_id") else None
+        }
+
+    return result
+
 
 
 # =====================================================
@@ -20,8 +52,15 @@ def list_pagamentos(
     db: DataBase = Depends(get_db)
 ):
     query = """
-        SELECT id, transacao_id, status, data_pagamento, ativo
-        FROM pagamento
+        SELECT
+            p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,
+            t.data as transacao_data, t.valor as transacao_valor, t.ativo as transacao_ativo,
+            t.descricao as transacao_descricao, t.pessoa_id as transacao_pessoa_id,
+            pe.id as pessoa_id, pe.nome as pessoa_nome,
+            pe.tipo as pessoa_tipo, pe.ativo as pessoa_ativo
+        FROM pagamento p
+        LEFT JOIN transacao t ON p.transacao_id = t.id
+        LEFT JOIN pessoa pe ON t.pessoa_id = pe.id
         WHERE 1=1
     """
     params = []
@@ -55,7 +94,7 @@ def list_pagamentos(
     rows = cursor.fetchall()
     cursor.close()
 
-    return [dict(row) for row in rows]
+    return [format_pagamento(row) for row in rows]
 
 
 # =====================================================
@@ -64,17 +103,27 @@ def list_pagamentos(
 @router.get("/{id}", response_model=Pagamento)
 def get_pagamento(id: int, db: DataBase = Depends(get_db)):
     cursor = db.cursor()
-    cursor.execute(
-        "SELECT id, transacao_id, status, data_pagamento, ativo FROM pagamento WHERE id = %s",
-        (id,)
-    )
+
+    cursor.execute("""
+        SELECT
+            p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,
+            t.data as transacao_data, t.valor as transacao_valor, t.ativo as transacao_ativo,
+            t.descricao as transacao_descricao, t.pessoa_id as transacao_pessoa_id,
+            pe.id as pessoa_id, pe.nome as pessoa_nome,
+            pe.tipo as pessoa_tipo, pe.ativo as pessoa_ativo
+        FROM pagamento p
+        LEFT JOIN transacao t ON t.id = p.transacao_id
+        LEFT JOIN pessoa pe ON t.pessoa_id = pe.id
+        WHERE p.id = %s
+    """, (id,))
+
     row = cursor.fetchone()
     cursor.close()
 
     if not row:
         raise HTTPException(404, "Pagamento não encontrado")
 
-    return dict(row)
+    return format_pagamento(row)
 
 
 # =====================================================
@@ -99,25 +148,46 @@ def create_pagamento(payload: PagamentoCreate, db: DataBase = Depends(get_db)):
         cursor.close()
         raise HTTPException(400, "Transação desativada")
 
-    # Validar data
-    if payload.data_pagamento and payload.data_pagamento < transacao["data"]:
-        cursor.close()
-        raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
+    # Validar data - converter ambos os datetimes para naive para comparação
+    if payload.data_pagamento:
+        # Se data_pagamento tem timezone, converter para naive
+        data_pagamento_naive = payload.data_pagamento.replace(tzinfo=None) if payload.data_pagamento.tzinfo else payload.data_pagamento
+        data_transacao_naive = transacao["data"].replace(tzinfo=None) if transacao["data"].tzinfo else transacao["data"]
+
+        if data_pagamento_naive < data_transacao_naive:
+            cursor.close()
+            raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
 
     # Inserir pagamento
     cursor.execute(
         """
         INSERT INTO pagamento (transacao_id, status, data_pagamento, ativo)
         VALUES (%s, %s, %s, %s)
-        RETURNING id, transacao_id, status, data_pagamento, ativo
+        RETURNING id
         """,
         (payload.transacao_id, payload.status, payload.data_pagamento, True)
     )
-    row = cursor.fetchone()
+    pagamento_id = cursor.fetchone()[0]
     db.commit()
+
+    # Buscar dados completos com JOIN
+    cursor.execute("""
+        SELECT
+            p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,
+            t.data as transacao_data, t.valor as transacao_valor, t.ativo as transacao_ativo,
+            t.descricao as transacao_descricao, t.pessoa_id as transacao_pessoa_id,
+            pe.id as pessoa_id, pe.nome as pessoa_nome,
+            pe.tipo as pessoa_tipo, pe.ativo as pessoa_ativo
+        FROM pagamento p
+        LEFT JOIN transacao t ON t.id = p.transacao_id
+        LEFT JOIN pessoa pe ON t.pessoa_id = pe.id
+        WHERE p.id = %s
+    """, (pagamento_id,))
+
+    row = cursor.fetchone()
     cursor.close()
 
-    return dict(row)
+    return format_pagamento(row)
 
 
 # =====================================================
@@ -170,9 +240,14 @@ def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(g
         cursor.execute("SELECT data FROM transacao WHERE id = %s", (transacao_id,))
         transacao = cursor.fetchone()
 
-        if transacao and payload.data_pagamento < transacao["data"]:
-            cursor.close()
-            raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
+        if transacao:
+            # Converter ambos os datetimes para naive para comparação
+            data_pagamento_naive = payload.data_pagamento.replace(tzinfo=None) if payload.data_pagamento.tzinfo else payload.data_pagamento
+            data_transacao_naive = transacao["data"].replace(tzinfo=None) if transacao["data"].tzinfo else transacao["data"]
+
+            if data_pagamento_naive < data_transacao_naive:
+                cursor.close()
+                raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
 
         updates.append("data_pagamento = %s")
         params.append(payload.data_pagamento)
@@ -187,14 +262,28 @@ def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(g
         UPDATE pagamento
         SET {', '.join(updates)}
         WHERE id = %s
-        RETURNING id, transacao_id, status, data_pagamento, ativo
     """
-    cursor.execute(query, tuple(params))
-    row = cursor.fetchone()
+    cursor.execute(query, tuple(params[:-1]))  # Remove o último parâmetro (id) que já foi usado no WHERE
     db.commit()
+
+    # Buscar dados atualizados com JOIN
+    cursor.execute("""
+        SELECT
+            p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,
+            t.data as transacao_data, t.valor as transacao_valor, t.ativo as transacao_ativo,
+            t.descricao as transacao_descricao, t.pessoa_id as transacao_pessoa_id,
+            pe.id as pessoa_id, pe.nome as pessoa_nome,
+            pe.tipo as pessoa_tipo, pe.ativo as pessoa_ativo
+        FROM pagamento p
+        LEFT JOIN transacao t ON t.id = p.transacao_id
+        LEFT JOIN pessoa pe ON t.pessoa_id = pe.id
+        WHERE p.id = %s
+    """, (id,))
+
+    row = cursor.fetchone()
     cursor.close()
 
-    return dict(row)
+    return format_pagamento(row)
 
 
 # =====================================================

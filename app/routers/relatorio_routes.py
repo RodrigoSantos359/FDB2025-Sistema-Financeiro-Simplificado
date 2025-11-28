@@ -75,8 +75,11 @@ def get_resumo_financeiro(
         params.append(conta_id)
     
     query += " GROUP BY c.tipo"
-    
-    rows = db.execute(query, tuple(params) if params else None)
+
+    cursor = db.cursor()
+    cursor.execute(query, tuple(params) if params else None)
+    rows = cursor.fetchall()
+    cursor.close()
     
     total_receitas = 0.0
     total_despesas = 0.0
@@ -138,8 +141,11 @@ def get_transacoes_categoria(
         params.append(data_fim)
     
     query += " GROUP BY c.id, c.nome HAVING COALESCE(SUM(t.valor), 0) > 0 ORDER BY total DESC"
-    
-    rows = db.execute(query, tuple(params) if params else None)
+
+    cursor = db.cursor()
+    cursor.execute(query, tuple(params) if params else None)
+    rows = cursor.fetchall()
+    cursor.close()
     
     return [
         {
@@ -169,8 +175,11 @@ def get_pagamentos_pendentes(db: DataBase = Depends(get_db)):
             AND t.ativo = TRUE
         ORDER BY p.id
     """
-    
-    rows = db.execute(query)
+
+    cursor = db.cursor()
+    cursor.execute(query)
+    rows = cursor.fetchall()
+    cursor.close()
     
     return [
         {
@@ -216,8 +225,11 @@ def get_contas_saldo(
         params.append(data_fim)
     
     query += " GROUP BY c.id, c.nome, c.saldo_inicial ORDER BY c.id"
-    
-    rows = db.execute(query, tuple(params) if params else None)
+
+    cursor = db.cursor()
+    cursor.execute(query, tuple(params) if params else None)
+    rows = cursor.fetchall()
+    cursor.close()
     
     return [
         {

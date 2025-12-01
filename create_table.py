@@ -28,9 +28,9 @@ BEGIN
         ALTER TABLE conta ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
     END IF;
 END $$;
-    """,
+
     # 1. Tabela Categoria
-    """
+
     CREATE TABLE IF NOT EXISTS categoria (
     id SERIAL PRIMARY KEY,
     nome VARCHAR(255) NOT NULL,
@@ -38,49 +38,41 @@ END $$;
     ativo BOOLEAN NOT NULL DEFAULT TRUE
 );
 
--- Adicionar coluna ativo se não existir
+-- 1. Adicionar coluna ativo na tabela categoria, se não existir
 DO $$ 
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+    IF NOT EXISTS (SELECT 1 
+                   FROM information_schema.columns 
                    WHERE table_name='categoria' AND column_name='ativo') THEN
         ALTER TABLE categoria ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
     END IF;
 END $$;
-    """,
-    # 2. Tabela Transação
-    """
-    CREATE TABLE IF NOT EXISTS transacao (
+
+-- 2. Criar tabela Transacao se não existir
+CREATE TABLE IF NOT EXISTS transacao (
     id SERIAL PRIMARY KEY,
     conta_id INTEGER NOT NULL REFERENCES conta(id),
     categoria_id INTEGER NOT NULL REFERENCES categoria(id),
-    pessoa_id INTEGER REFERENCES pessoa(id),
+    pessoa_id INTEGER REFERENCES pessoa(id), -- nova coluna pessoa_id
     valor DECIMAL(10, 2) NOT NULL CHECK (valor > 0),
-    data TIMESTAMP NOT NULL,
+    data DATE NOT NULL, -- alterado para DATE, sem hora
     descricao TEXT,
     ativo BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+
 -- Adicionar coluna ativo se não existir
-DO $$
+DO $$ 
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name='transacao' AND column_name='ativo') THEN
         ALTER TABLE transacao ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
     END IF;
 END $$;
 
--- Adicionar coluna pessoa_id se não existir
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_name='transacao' AND column_name='pessoa_id') THEN
-        ALTER TABLE transacao ADD COLUMN pessoa_id INTEGER REFERENCES pessoa(id);
-    END IF;
-END $$;
 
-    """,
     # 3. Tabela Pessoa
-    """
+
     CREATE TABLE IF NOT EXISTS pessoa (
     id SERIAL PRIMARY KEY,
     nome VARCHAR(255) NOT NULL,
@@ -96,9 +88,9 @@ BEGIN
         ALTER TABLE pessoa ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
     END IF;
 END $$;
-    """,
+
     # 4. Tabela Pagamento
-    """
+
     CREATE TABLE IF NOT EXISTS pagamento (
     id SERIAL PRIMARY KEY,
     transacao_id INTEGER NOT NULL REFERENCES transacao(id),
@@ -115,9 +107,10 @@ BEGIN
         ALTER TABLE pagamento ADD COLUMN ativo BOOLEAN NOT NULL DEFAULT TRUE;
     END IF;
 END $$;
-    """,
+    );
+
     # 5. Índices para melhor performance
-    """
+
     -- Índices para melhor performance
 CREATE INDEX IF NOT EXISTS idx_transacao_conta_id ON transacao(conta_id);
 CREATE INDEX IF NOT EXISTS idx_transacao_categoria_id ON transacao(categoria_id);
@@ -126,6 +119,13 @@ CREATE INDEX IF NOT EXISTS idx_transacao_ativo ON transacao(ativo);
 CREATE INDEX IF NOT EXISTS idx_pagamento_transacao_id ON pagamento(transacao_id);
 CREATE INDEX IF NOT EXISTS idx_pagamento_status ON pagamento(status);
 CREATE INDEX IF NOT EXISTS idx_pagamento_ativo ON pagamento(ativo);
+
+
+SELECT * FROM categoria;
+SELECT * FROM conta;
+SELECT * FROM transacao;
+ALTER TABLE transacao
+ADD COLUMN pessoa_id INTEGER;  -- Ajuste o tipo se necessário
     """
 ]
 

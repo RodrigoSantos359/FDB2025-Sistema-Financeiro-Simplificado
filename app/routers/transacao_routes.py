@@ -6,7 +6,6 @@ from modules.transacao.schemas import TransacaoCreate, TransacaoUpdate, Transaca
 
 router = APIRouter(prefix="/transacoes", tags=["transacoes"])
 
-
 # =======================================================
 # Função auxiliar para montar o objeto final
 # =======================================================
@@ -33,16 +32,15 @@ def format_transacao(row):
         } if row.get("pessoa_id") else None
     }
 
-
 # =======================================================
-# LISTAR TRANSAÇÕES (AGORA COM JOIN NA CATEGORIA)
+# LISTAR TRANSAÇÕES (com filtros)
 # =======================================================
 @router.get("/", response_model=List[Transacao])
 def list_transacoes(
     conta_id: Optional[int] = Query(None),
     categoria_id: Optional[int] = Query(None),
-    data_ini: Optional[datetime] = Query(None),
-    data_fim: Optional[datetime] = Query(None),
+    data_ini: Optional[str] = Query(None),
+    data_fim: Optional[str] = Query(None),
     ativo: Optional[bool] = Query(None),
     db=Depends(get_db)
 ):
@@ -72,12 +70,20 @@ def list_transacoes(
         params.append(categoria_id)
 
     if data_ini:
+        try:
+            data_ini_obj = datetime.strptime(data_ini, "%d/%m/%Y").date()
+        except ValueError:
+            data_ini_obj = datetime.strptime(data_ini, "%d-%m-%Y").date()
         query += " AND t.data >= %s"
-        params.append(data_ini)
+        params.append(data_ini_obj)
 
     if data_fim:
+        try:
+            data_fim_obj = datetime.strptime(data_fim, "%d/%m/%Y").date()
+        except ValueError:
+            data_fim_obj = datetime.strptime(data_fim, "%d-%m-%Y").date()
         query += " AND t.data <= %s"
-        params.append(data_fim)
+        params.append(data_fim_obj)
 
     if ativo is not None:
         query += " AND t.ativo = %s"
@@ -90,7 +96,6 @@ def list_transacoes(
     cursor.close()
 
     return [format_transacao(row) for row in rows]
-
 
 # =======================================================
 # GET POR ID
@@ -119,7 +124,6 @@ def get_transacao(id: int, db=Depends(get_db)):
         raise HTTPException(status_code=404, detail="Transação não encontrada")
 
     return format_transacao(row)
-
 
 # =======================================================
 # CRIAR TRANSAÇÃO
@@ -169,19 +173,17 @@ def create_transacao(payload: TransacaoCreate, db=Depends(get_db)):
         VALUES (%s, %s, %s, %s, %s, %s, TRUE)
         RETURNING id, conta_id, pessoa_id, valor, data, descricao, ativo
     """, (payload.conta_id, payload.categoria_id, payload.pessoa_id,
-          payload.valor, payload.data, payload.descricao))
+          payload.valor, payload.data, payload.descricao))  # já é datetime
 
     row = cursor.fetchone()
     db.commit()
     cursor.close()
 
-    # Montar objeto final com categoria e pessoa
     return {
         **row,
         "categoria": categoria,
         "pessoa": pessoa
     }
-
 
 # =======================================================
 # UPDATE
@@ -298,7 +300,6 @@ def update_transacao(id: int, payload: TransacaoUpdate, db=Depends(get_db)):
         "categoria": categoria_atualizada,
         "pessoa": pessoa_atualizada
     }
-
 
 # =======================================================
 # DESATIVAR

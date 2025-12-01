@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime
 from core.db import get_db, DataBase
 from modules.pagamento.schemas import PagamentoCreate, PagamentoUpdate, Pagamento
 
@@ -15,11 +15,9 @@ def format_pagamento(row):
         "ativo": row["ativo"]
     }
 
-    # Incluir transacao_id se existir
     if row.get("transacao_id"):
         result["transacao_id"] = row["transacao_id"]
 
-    # Incluir transacao se existir
     if row.get("transacao_id"):
         result["transacao"] = {
             "id": row.get("transacao_id"),
@@ -38,16 +36,15 @@ def format_pagamento(row):
     return result
 
 
-
 # =====================================================
-# LISTAR PAGAMENTOS COM FILTROS
+# LISTAR PAGAMENTOS COM FILTROS (dd/mm/aaaa)
 # =====================================================
 @router.get("/", response_model=List[Pagamento])
 def list_pagamentos(
     transacao_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None, description="pago / pendente / cancelado"),
-    data_ini: Optional[datetime] = Query(None),
-    data_fim: Optional[datetime] = Query(None),
+    data_ini: Optional[str] = Query(None, description="Formato dd/mm/aaaa"),
+    data_fim: Optional[str] = Query(None, description="Formato dd/mm/aaaa"),
     ativo: Optional[bool] = Query(None),
     db: DataBase = Depends(get_db)
 ):
@@ -75,13 +72,22 @@ def list_pagamentos(
         query += " AND status = %s"
         params.append(status)
 
+    # Converter datas no formato dd/mm/aaaa
     if data_ini:
+        try:
+            data_ini_dt = datetime.strptime(data_ini, "%d/%m/%Y")
+        except ValueError:
+            raise HTTPException(400, "data_ini inválida. Use dd/mm/aaaa")
         query += " AND data_pagamento >= %s"
-        params.append(data_ini)
+        params.append(data_ini_dt)
 
     if data_fim:
+        try:
+            data_fim_dt = datetime.strptime(data_fim, "%d/%m/%Y")
+        except ValueError:
+            raise HTTPException(400, "data_fim inválida. Use dd/mm/aaaa")
         query += " AND data_pagamento <= %s"
-        params.append(data_fim)
+        params.append(data_fim_dt)
 
     if ativo is not None:
         query += " AND ativo = %s"
@@ -103,7 +109,6 @@ def list_pagamentos(
 @router.get("/{id}", response_model=Pagamento)
 def get_pagamento(id: int, db: DataBase = Depends(get_db)):
     cursor = db.cursor()
-
     cursor.execute("""
         SELECT
             p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,
@@ -135,7 +140,6 @@ def create_pagamento(payload: PagamentoCreate, db: DataBase = Depends(get_db)):
     if payload.status not in ("pago", "pendente", "cancelado"):
         raise HTTPException(400, "Status inválido")
 
-    # Verificar transação
     cursor = db.cursor()
     cursor.execute("SELECT id, ativo, data FROM transacao WHERE id = %s", (payload.transacao_id,))
     transacao = cursor.fetchone()
@@ -148,9 +152,7 @@ def create_pagamento(payload: PagamentoCreate, db: DataBase = Depends(get_db)):
         cursor.close()
         raise HTTPException(400, "Transação desativada")
 
-    # Validar data - converter ambos os datetimes para naive para comparação
     if payload.data_pagamento:
-        # Se data_pagamento tem timezone, converter para naive
         data_pagamento_naive = payload.data_pagamento.replace(tzinfo=None) if payload.data_pagamento.tzinfo else payload.data_pagamento
         data_transacao_naive = transacao["data"].replace(tzinfo=None) if transacao["data"].tzinfo else transacao["data"]
 
@@ -158,7 +160,6 @@ def create_pagamento(payload: PagamentoCreate, db: DataBase = Depends(get_db)):
             cursor.close()
             raise HTTPException(400, "data_pagamento não pode ser anterior à data da transação")
 
-    # Inserir pagamento
     cursor.execute(
         """
         INSERT INTO pagamento (transacao_id, status, data_pagamento, ativo)
@@ -167,10 +168,14 @@ def create_pagamento(payload: PagamentoCreate, db: DataBase = Depends(get_db)):
         """,
         (payload.transacao_id, payload.status, payload.data_pagamento, True)
     )
-    pagamento_id = cursor.fetchone()[0]
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        raise HTTPException(500, "Erro ao criar pagamento")
+    pagamento_id = row["id"]
     db.commit()
 
-    # Buscar dados completos com JOIN
+    # Buscar dados completos
     cursor.execute("""
         SELECT
             p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,
@@ -207,7 +212,6 @@ def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(g
     updates = []
     params = []
 
-    # Alterar transacao_id
     if payload.transacao_id is not None:
         cursor.execute("SELECT id, ativo, data FROM transacao WHERE id = %s", (payload.transacao_id,))
         transacao = cursor.fetchone()
@@ -223,7 +227,6 @@ def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(g
         updates.append("transacao_id = %s")
         params.append(payload.transacao_id)
 
-    # Alterar status
     if payload.status is not None:
         if payload.status not in ("pago", "pendente", "cancelado"):
             cursor.close()
@@ -232,16 +235,12 @@ def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(g
         updates.append("status = %s")
         params.append(payload.status)
 
-    # Alterar data_pagamento
     if payload.data_pagamento is not None:
-
         transacao_id = payload.transacao_id or pagamento["transacao_id"]
-
         cursor.execute("SELECT data FROM transacao WHERE id = %s", (transacao_id,))
         transacao = cursor.fetchone()
 
         if transacao:
-            # Converter ambos os datetimes para naive para comparação
             data_pagamento_naive = payload.data_pagamento.replace(tzinfo=None) if payload.data_pagamento.tzinfo else payload.data_pagamento
             data_transacao_naive = transacao["data"].replace(tzinfo=None) if transacao["data"].tzinfo else transacao["data"]
 
@@ -257,16 +256,10 @@ def update_pagamento(id: int, payload: PagamentoUpdate, db: DataBase = Depends(g
         return dict(pagamento)
 
     params.append(id)
-
-    query = f"""
-        UPDATE pagamento
-        SET {', '.join(updates)}
-        WHERE id = %s
-    """
-    cursor.execute(query, tuple(params[:-1]))  # Remove o último parâmetro (id) que já foi usado no WHERE
+    query = f"UPDATE pagamento SET {', '.join(updates)} WHERE id = %s"
+    cursor.execute(query, tuple(params))
     db.commit()
 
-    # Buscar dados atualizados com JOIN
     cursor.execute("""
         SELECT
             p.id, p.transacao_id, p.status, p.data_pagamento, p.ativo,

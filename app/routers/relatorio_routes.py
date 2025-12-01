@@ -41,17 +41,26 @@ class ContaSaldo(BaseModel):
     saldo: float
 
 
+# Função auxiliar para converter datas
+def parse_date(date_str: Optional[str], field_name: str) -> Optional[datetime]:
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str, "%d/%m/%Y")
+    except ValueError:
+        raise HTTPException(400, f"{field_name} inválida. Use dd/mm/aaaa")
+
+
 @router.get('/resumo-financeiro', response_model=ResumoFinanceiro)
 def get_resumo_financeiro(
-    data_ini: Optional[datetime] = Query(None, description="Data inicial (ISO 8601)"),
-    data_fim: Optional[datetime] = Query(None, description="Data final (ISO 8601)"),
+    data_ini: Optional[str] = Query(None, description="Data inicial (dd/mm/aaaa)"),
+    data_fim: Optional[str] = Query(None, description="Data final (dd/mm/aaaa)"),
     conta_id: Optional[int] = Query(None, description="Filtrar por conta"),
     db: DataBase = Depends(get_db)
 ):
-    """
-    Retorna resumo financeiro com total de receitas, despesas e saldo final.
-    Considera apenas transações ativas.
-    """
+    data_ini_dt = parse_date(data_ini, "data_ini")
+    data_fim_dt = parse_date(data_fim, "data_fim")
+
     query = """
         SELECT 
             c.tipo,
@@ -61,44 +70,41 @@ def get_resumo_financeiro(
         WHERE t.ativo = TRUE AND c.ativo = TRUE
     """
     params = []
-    
-    if data_ini:
+
+    if data_ini_dt:
         query += " AND t.data >= %s"
-        params.append(data_ini)
-    
-    if data_fim:
+        params.append(data_ini_dt)
+
+    if data_fim_dt:
         query += " AND t.data <= %s"
-        params.append(data_fim)
-    
+        params.append(data_fim_dt)
+
     if conta_id:
         query += " AND t.conta_id = %s"
         params.append(conta_id)
-    
+
     query += " GROUP BY c.tipo"
 
     cursor = db.cursor()
     cursor.execute(query, tuple(params) if params else None)
     rows = cursor.fetchall()
     cursor.close()
-    
+
     total_receitas = 0.0
     total_despesas = 0.0
-    
+
     for row in rows:
         if row['tipo'] == 'receita':
             total_receitas = float(row['total'])
         elif row['tipo'] == 'despesa':
             total_despesas = float(row['total'])
-    
+
     saldo_final = total_receitas - total_despesas
-    
-    periodo_ini = data_ini.strftime('%Y-%m-%d') if data_ini else None
-    periodo_fim = data_fim.strftime('%Y-%m-%d') if data_fim else None
-    
+
     return {
         "periodo": {
-            "ini": periodo_ini or "",
-            "fim": periodo_fim or ""
+            "ini": data_ini or "",
+            "fim": data_fim or ""
         },
         "total_receitas": total_receitas,
         "total_despesas": total_despesas,
@@ -109,14 +115,13 @@ def get_resumo_financeiro(
 @router.get('/transacoes-categoria', response_model=List[TransacaoCategoria])
 def get_transacoes_categoria(
     categoria_id: Optional[int] = Query(None, description="Filtrar por categoria"),
-    data_ini: Optional[datetime] = Query(None, description="Data inicial (ISO 8601)"),
-    data_fim: Optional[datetime] = Query(None, description="Data final (ISO 8601)"),
+    data_ini: Optional[str] = Query(None, description="Data inicial (dd/mm/aaaa)"),
+    data_fim: Optional[str] = Query(None, description="Data final (dd/mm/aaaa)"),
     db: DataBase = Depends(get_db)
 ):
-    """
-    Retorna total de transações agrupadas por categoria.
-    Considera apenas transações ativas.
-    """
+    data_ini_dt = parse_date(data_ini, "data_ini")
+    data_fim_dt = parse_date(data_fim, "data_fim")
+
     query = """
         SELECT 
             c.id as categoria_id,
@@ -127,26 +132,26 @@ def get_transacoes_categoria(
         WHERE c.ativo = TRUE
     """
     params = []
-    
+
     if categoria_id:
         query += " AND c.id = %s"
         params.append(categoria_id)
-    
-    if data_ini:
+
+    if data_ini_dt:
         query += " AND (t.data IS NULL OR t.data >= %s)"
-        params.append(data_ini)
-    
-    if data_fim:
+        params.append(data_ini_dt)
+
+    if data_fim_dt:
         query += " AND (t.data IS NULL OR t.data <= %s)"
-        params.append(data_fim)
-    
+        params.append(data_fim_dt)
+
     query += " GROUP BY c.id, c.nome HAVING COALESCE(SUM(t.valor), 0) > 0 ORDER BY total DESC"
 
     cursor = db.cursor()
     cursor.execute(query, tuple(params) if params else None)
     rows = cursor.fetchall()
     cursor.close()
-    
+
     return [
         {
             "categoria_id": row['categoria_id'],
@@ -159,9 +164,6 @@ def get_transacoes_categoria(
 
 @router.get('/pagamentos-pendentes', response_model=List[PagamentoPendente])
 def get_pagamentos_pendentes(db: DataBase = Depends(get_db)):
-    """
-    Retorna todos os pagamentos pendentes e ativos.
-    """
     query = """
         SELECT 
             p.id,
@@ -175,12 +177,11 @@ def get_pagamentos_pendentes(db: DataBase = Depends(get_db)):
             AND t.ativo = TRUE
         ORDER BY p.id
     """
-
     cursor = db.cursor()
     cursor.execute(query)
     rows = cursor.fetchall()
     cursor.close()
-    
+
     return [
         {
             "id": row['id'],
@@ -194,14 +195,13 @@ def get_pagamentos_pendentes(db: DataBase = Depends(get_db)):
 
 @router.get('/contas-saldo', response_model=List[ContaSaldo])
 def get_contas_saldo(
-    data_ini: Optional[datetime] = Query(None, description="Data inicial (ISO 8601)"),
-    data_fim: Optional[datetime] = Query(None, description="Data final (ISO 8601)"),
+    data_ini: Optional[str] = Query(None, description="Data inicial (dd/mm/aaaa)"),
+    data_fim: Optional[str] = Query(None, description="Data final (dd/mm/aaaa)"),
     db: DataBase = Depends(get_db)
 ):
-    """
-    Retorna receitas, despesas e saldo por conta.
-    Considera apenas transações ativas.
-    """
+    data_ini_dt = parse_date(data_ini, "data_ini")
+    data_fim_dt = parse_date(data_fim, "data_fim")
+
     query = """
         SELECT 
             c.id as conta_id,
@@ -215,22 +215,22 @@ def get_contas_saldo(
         WHERE c.ativo = TRUE
     """
     params = []
-    
-    if data_ini:
+
+    if data_ini_dt:
         query += " AND (t.data IS NULL OR t.data >= %s)"
-        params.append(data_ini)
-    
-    if data_fim:
+        params.append(data_ini_dt)
+
+    if data_fim_dt:
         query += " AND (t.data IS NULL OR t.data <= %s)"
-        params.append(data_fim)
-    
+        params.append(data_fim_dt)
+
     query += " GROUP BY c.id, c.nome, c.saldo_inicial ORDER BY c.id"
 
     cursor = db.cursor()
     cursor.execute(query, tuple(params) if params else None)
     rows = cursor.fetchall()
     cursor.close()
-    
+
     return [
         {
             "conta_id": row['conta_id'],
@@ -241,4 +241,3 @@ def get_contas_saldo(
         }
         for row in rows
     ]
-
